@@ -1,0 +1,21 @@
+═══════════════════════════════════════════════════════════════
+  БЫСТРОЕ РЕШЕНИЕ ПРОБЛЕМ
+═══════════════════════════════════════════════════════════════
+
+1. ОШИБКА dpkg:
+   sudo dpkg --configure -a
+   sudo apt --fix-broken install
+   sudo apt update
+
+2. ОШИБКА Python 3.11 не найден:
+   export DEBIAN_FRONTEND=noninteractive
+   sudo apt install -y python3.12 python3.12-venv python3-pip git curl wget docker.io docker-compose
+
+3. PAM диалог:
+   Скрипт обрабатывает автоматически. Если появляется вручную - выберите "Yes"
+
+4. После исправления:
+   cd ~/projects/TG_BOT-AdmissionSum
+   bash QUICK_DEPLOY.sh
+
+═══════════════════════════════════════════════════════════════

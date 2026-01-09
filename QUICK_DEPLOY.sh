@@ -65,7 +65,39 @@ sudo apt upgrade -y
 
 # Шаг 2: Установка зависимостей
 echo -e "\n${GREEN}[2/9]${NC} Установка зависимостей..."
-sudo apt install -y python3.11 python3.11-venv python3-pip git curl wget docker.io docker-compose
+
+# Определение доступной версии Python
+PYTHON_VERSION=""
+if command -v python3.12 &> /dev/null || apt-cache show python3.12 &> /dev/null; then
+    PYTHON_VERSION="3.12"
+    PYTHON_PACKAGE="python3.12"
+    PYTHON_VENV_PACKAGE="python3.12-venv"
+elif command -v python3.11 &> /dev/null || apt-cache show python3.11 &> /dev/null; then
+    PYTHON_VERSION="3.11"
+    PYTHON_PACKAGE="python3.11"
+    PYTHON_VENV_PACKAGE="python3.11-venv"
+else
+    # Попытка добавить deadsnakes PPA для Python 3.11
+    echo -e "${YELLOW}Python 3.11/3.12 не найден. Добавление deadsnakes PPA...${NC}"
+    sudo apt install -y software-properties-common
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt update
+    PYTHON_VERSION="3.11"
+    PYTHON_PACKAGE="python3.11"
+    PYTHON_VENV_PACKAGE="python3.11-venv"
+fi
+
+echo -e "${GREEN}Используется Python ${PYTHON_VERSION}${NC}"
+
+# Установка пакетов с автоматическим ответом на PAM диалог
+export DEBIAN_FRONTEND=noninteractive
+sudo -E apt install -y $PYTHON_PACKAGE $PYTHON_VENV_PACKAGE python3-pip git curl wget docker.io docker-compose || {
+    # Если установка не удалась, попробуем без конкретной версии
+    echo -e "${YELLOW}Попытка установить python3 (общая версия)...${NC}"
+    sudo -E apt install -y python3 python3-venv python3-pip git curl wget docker.io docker-compose
+    PYTHON_VERSION="3"
+    PYTHON_PACKAGE="python3"
+}
 
 # Запуск Docker
 sudo systemctl start docker
@@ -75,8 +107,12 @@ sudo usermod -aG docker $USER
 # Шаг 3: Создание виртуального окружения
 echo -e "\n${GREEN}[3/9]${NC} Создание виртуального окружения Python..."
 if [ ! -d "venv" ]; then
-    python3.11 -m venv venv
-    echo -e "${GREEN}✓${NC} Виртуальное окружение создано"
+    if [ "$PYTHON_VERSION" = "3" ]; then
+        python3 -m venv venv
+    else
+        python${PYTHON_VERSION} -m venv venv
+    fi
+    echo -e "${GREEN}✓${NC} Виртуальное окружение создано (Python ${PYTHON_VERSION})"
 else
     echo -e "${YELLOW}⚠️  Виртуальное окружение уже существует${NC}"
 fi
@@ -142,7 +178,7 @@ User=$CURRENT_USER
 Group=$CURRENT_USER
 WorkingDirectory=$CURRENT_DIR
 Environment="PATH=$CURRENT_DIR/venv/bin"
-ExecStart=$CURRENT_DIR/venv/bin/python main.py
+ExecStart=$CURRENT_DIR/venv/bin/python3 main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
