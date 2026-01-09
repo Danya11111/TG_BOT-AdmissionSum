@@ -91,18 +91,41 @@ echo -e "${GREEN}Используется Python ${PYTHON_VERSION}${NC}"
 
 # Установка пакетов с автоматическим ответом на PAM диалог
 export DEBIAN_FRONTEND=noninteractive
-sudo -E apt install -y $PYTHON_PACKAGE $PYTHON_VENV_PACKAGE python3-pip git curl wget docker.io docker-compose || {
+
+# Исправление конфликта Docker (containerd.io vs containerd)
+echo -e "${YELLOW}Проверка конфликтов Docker...${NC}"
+if dpkg -l | grep -q "^ii.*containerd.io"; then
+    echo -e "${YELLOW}Удаление конфликтующего containerd.io...${NC}"
+    sudo apt remove -y containerd.io 2>/dev/null || true
+fi
+
+# Установка базовых пакетов (без Docker сначала)
+if ! sudo -E apt install -y $PYTHON_PACKAGE $PYTHON_VENV_PACKAGE python3-pip git curl wget; then
     # Если установка не удалась, попробуем без конкретной версии
     echo -e "${YELLOW}Попытка установить python3 (общая версия)...${NC}"
-    sudo -E apt install -y python3 python3-venv python3-pip git curl wget docker.io docker-compose
+    sudo -E apt install -y python3 python3-venv python3-pip git curl wget
     PYTHON_VERSION="3"
     PYTHON_PACKAGE="python3"
-}
+fi
+
+# Установка Docker (системный docker.io, который не конфликтует)
+echo -e "${GREEN}Установка Docker...${NC}"
+if ! sudo -E apt install -y docker.io docker-compose; then
+    echo -e "${YELLOW}Попытка установить Docker без docker-compose...${NC}"
+    sudo -E apt install -y docker.io || {
+        echo -e "${RED}✗${NC} Не удалось установить Docker. Попробуйте вручную:"
+        echo -e "  ${YELLOW}sudo apt remove -y containerd.io${NC}"
+        echo -e "  ${YELLOW}sudo apt install -y docker.io${NC}"
+        exit 1
+    }
+    # Установка docker-compose отдельно, если нужно
+    sudo apt install -y docker-compose-plugin || true
+fi
 
 # Запуск Docker
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker $USER
+sudo systemctl start docker || true
+sudo systemctl enable docker || true
+sudo usermod -aG docker $USER || true
 
 # Шаг 3: Создание виртуального окружения
 echo -e "\n${GREEN}[3/9]${NC} Создание виртуального окружения Python..."

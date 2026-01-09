@@ -1,27 +1,25 @@
 ═══════════════════════════════════════════════════════════════
-  БЫСТРОЕ РЕШЕНИЕ ПРОБЛЕМ
+  БЫСТРОЕ ИСПРАВЛЕНИЕ КОНФЛИКТА DOCKER
 ═══════════════════════════════════════════════════════════════
 
-1. ОШИБКА dpkg:
-   sudo dpkg --configure -a
-   sudo apt --fix-broken install
-   sudo apt update
+Ошибка: containerd.io: Conflicts: containerd
 
-2. ОШИБКА Python 3.11 не найден:
-   export DEBIAN_FRONTEND=noninteractive
-   sudo apt install -y python3.12 python3.12-venv python3-pip git curl wget
+РЕШЕНИЕ:
 
-3. ОШИБКА Docker (containerd.io конфликт):
+1. Удалить конфликтующий пакет:
    sudo apt remove -y containerd.io
+
+2. Установить Docker:
+   export DEBIAN_FRONTEND=noninteractive
+   sudo apt update
    sudo apt install -y docker.io docker-compose
+
+3. Запустить Docker:
    sudo systemctl start docker
+   sudo systemctl enable docker
 
-4. PAM диалог:
-   Скрипт обрабатывает автоматически. Если появляется вручную - выберите "Yes"
-
-5. После исправления:
+4. Продолжить развертывание:
    cd ~/projects/TG_BOT-AdmissionSum
-   git pull origin develop
    bash QUICK_DEPLOY.sh
 
 ═══════════════════════════════════════════════════════════════
