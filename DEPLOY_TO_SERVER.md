@@ -39,22 +39,21 @@ sudo usermod -aG docker $USER
 # Выйдите и войдите снова, чтобы изменения вступили в силу
 ```
 
-## Шаг 3: Создание директории для проекта
+## Шаг 3: Создание директории и клонирование проекта
 
 ```bash
 # Создайте директорию для проекта
 mkdir -p ~/projects
 cd ~/projects
-```
 
-## Шаг 4: Загрузка проекта на сервер
-
-### Вариант А: Через Git (если проект в репозитории)
-
-```bash
-git clone <ваш_репозиторий_url> TG_BOT-AdmissionSum
+# Клонирование проекта с ветки develop из GitHub
+git clone -b develop https://github.com/Danya11111/TG_BOT-AdmissionSum.git TG_BOT-AdmissionSum
 cd TG_BOT-AdmissionSum
 ```
+
+**Примечание:** Проект находится на GitHub: https://github.com/Danya11111/TG_BOT-AdmissionSum (ветка `develop`)
+
+## Шаг 4: Альтернативные способы загрузки (если Git недоступен)
 
 ### Вариант Б: Через SCP (с вашего локального компьютера)
 
@@ -282,11 +281,30 @@ docker-compose logs -f qdrant
 
 ## Устранение проблем
 
+### Ошибка dpkg: "dpkg was interrupted"
+
+Если вы видите ошибку:
+```
+E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'
+```
+
+Выполните:
+```bash
+sudo dpkg --configure -a
+sudo apt --fix-broken install
+sudo apt update
+```
+
+Затем запустите скрипт развертывания снова.
+
+**Подробная инструкция:** См. `ИСПРАВЛЕНИЕ_DPKG.md`
+
 ### Бот не запускается
 
 1. Проверьте логи: `sudo journalctl -u guu-bot -n 50`
 2. Проверьте, что `.env` файл заполнен правильно
 3. Проверьте, что виртуальное окружение активировано при запуске
+4. Убедитесь, что сервис создан: `ls /etc/systemd/system/guu-bot.service`
 
 ### Ошибки подключения к Qdrant
 
