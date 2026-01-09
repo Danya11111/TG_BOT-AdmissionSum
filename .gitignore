@@ -70,3 +70,37 @@ Thumbs.db
 *.bak
 *.cache
 
+# Data directories (можно добавить в репозиторий или исключить)
+# data/guu/chunks/
+# data/guu/raw/
+# qdrant_storage/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Reports and generated files
+reports/
+*.csv
+*.xlsx
+!data/guu/stats/*.csv

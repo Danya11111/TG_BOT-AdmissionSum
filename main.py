@@ -6,10 +6,12 @@ from telebot.apihelper import ApiTelegramException
 from telebot.handler_backends import BaseMiddleware
 from dotenv import load_dotenv
 import requests
+from typing import Optional
 
 from gigachat_client import GigaChatClient
 from prompts import build_system_prompt, build_short_prompt
-from rag_search import RagSearcher
+from rag_search_vector import VectorRagSearcher
+from user_queries_storage import UserQueriesStorage
 from utils import calculate_total_score, get_directions_data, calculate_chance, get_improved_prediction, get_direction_chart, get_full_direction_stats, find_directions_by_subjects
 from prompts import build_admission_chance_prompt
 from keyboards import (
@@ -73,15 +75,34 @@ if GIGACHAT_AUTH_BASIC:
         logger.error(f"Ошибка инициализации GigaChat клиента: {e}")
         gc_client = None
 
-# Инициализация RAG-поиска
+# Инициализация RAG-поиска (векторный поиск через Qdrant с локальными embeddings)
 RAG_SEARCHER = None
 try:
-    logger.info("Инициализация RAG-поиска...")
-    RAG_SEARCHER = RagSearcher()
-    logger.info("RAG-поиск успешно инициализирован")
+    logger.info("Инициализация векторного RAG-поиска...")
+    RAG_SEARCHER = VectorRagSearcher(
+        qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
+        qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
+        collection_name=os.getenv("QDRANT_COLLECTION_NAME", "guu_documents"),
+    )
+    logger.info("Векторный RAG-поиск успешно инициализирован")
 except Exception as e:
-    logger.error(f"Ошибка инициализации RAG-поиска: {e}")
+    logger.error(f"Ошибка инициализации векторного RAG-поиска: {e}")
+    logger.warning("RAG-поиск будет недоступен. Убедитесь, что Qdrant запущен и данные мигрированы.")
     RAG_SEARCHER = None
+
+# Инициализация хранилища запросов пользователей
+USER_QUERIES_STORAGE = None
+try:
+    logger.info("Инициализация хранилища запросов пользователей...")
+    USER_QUERIES_STORAGE = UserQueriesStorage(
+        qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
+        qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
+    )
+    logger.info("Хранилище запросов пользователей успешно инициализировано")
+except Exception as e:
+    logger.error(f"Ошибка инициализации хранилища запросов: {e}")
+    logger.warning("Сохранение запросов пользователей будет недоступно.")
+    USER_QUERIES_STORAGE = None
 
 # Хранение данных пользователей
 user_data = {}
@@ -102,33 +123,75 @@ GUU_CONTACTS = {
 }
 
 
-def ask_gigachat(user_text: str) -> str:
+def ask_gigachat(user_text: str, user_id: Optional[int] = None) -> str:
     """RAG-поиск и генерация ответа через GigaChat с fallback-механизмом"""
     logger.info(f"Обработка вопроса пользователя: {user_text[:100]}")
     
-    # Этап 1: RAG-поиск
+    # Этап 1: Поиск похожих запросов пользователей (если доступно)
+    similar_queries_context = ""
+    if USER_QUERIES_STORAGE is not None:
+        try:
+            similar_queries = USER_QUERIES_STORAGE.search_similar_queries(user_text, top_k=3)
+            if similar_queries:
+                logger.info(f"Найдено {len(similar_queries)} похожих запросов пользователей")
+                # Формируем контекст из похожих запросов
+                similar_contexts = []
+                for sq in similar_queries:
+                    if sq.get("response"):
+                        similar_contexts.append(f"Похожий вопрос: {sq['query']}\nОтвет: {sq['response'][:200]}...")
+                if similar_contexts:
+                    similar_queries_context = "\n\n".join(similar_contexts)
+        except Exception as e:
+            logger.warning(f"Ошибка при поиске похожих запросов: {e}")
+    
+    # Этап 2: RAG-поиск по документам
     rag_context_lines = None
     sources_suffix = ""
     hits = []
     
     if RAG_SEARCHER is not None:
         try:
-            logger.info("Выполняется RAG-поиск...")
-            hits = RAG_SEARCHER.search(user_text, top_k=3)
-            rag_context_lines = RagSearcher.format_context(hits)
+            logger.info("Выполняется векторный RAG-поиск...")
+            hits = RAG_SEARCHER.search(user_text, top_k=10)  # Теперь топ-10 вместо топ-3
+            rag_context_lines = VectorRagSearcher.format_context(hits)
             
             if hits:
                 logger.info(f"Найдено {len(hits)} релевантных фрагментов, лучший score: {hits[0].score:.3f}")
-                # Дедупликация источников при одинаковых ссылках/заголовках с сохранением порядка
+                # Дедупликация и форматирование источников
                 seen_sources = set()
                 unique_sources = []
                 for h in hits:
                     title = h.title or 'Источник'
-                    key = (title.strip(), (h.source or '').strip())
+                    source = (h.source or '').strip()
+                    
+                    # Пропускаем пустые источники
+                    if not source:
+                        continue
+                    
+                    # Формируем ключ для дедупликации
+                    key = (title.strip(), source)
                     if key in seen_sources:
                         continue
                     seen_sources.add(key)
-                    unique_sources.append(f"- {title} — {h.source}")
+                    
+                    # Форматируем источник в зависимости от типа
+                    if source.startswith("http://") or source.startswith("https://"):
+                        # URL - проверяем, что это валидный домен ГУУ
+                        if "guu.ru" in source or "priem.guu.ru" in source:
+                            # Убираем слеши в конце для читаемости
+                            clean_url = source.rstrip('/')
+                            unique_sources.append(f"- {title} — {clean_url}")
+                        # Пропускаем невалидные URL
+                    elif "GUU_docs" in source or source.startswith("GUU_docs"):
+                        # Локальный файл - показываем только название файла
+                        file_name = source.split("\\")[-1].split("/")[-1]
+                        # Убираем расширение для читаемости
+                        display_name = file_name.replace(".pdf", "").replace(".docx", "").replace("_", " ").replace("-", " ")
+                        unique_sources.append(f"- 📄 {display_name}")
+                    else:
+                        # Другие источники - показываем как есть
+                        unique_sources.append(f"- {title} — {source}")
+                
                 if unique_sources:
                     sources_suffix = "\n\n📚 <b>Источники:</b>\n" + "\n".join(unique_sources)
             else:
@@ -179,7 +242,22 @@ def ask_gigachat(user_text: str) -> str:
     # Если нет GigaChat — используем fallback
     if not gc_client:
         logger.info("GigaChat не доступен, используется fallback-режим")
-        return create_fallback_response("medium")
+        fallback_answer = create_fallback_response("medium")
+        
+        # Сохраняем запрос и ответ пользователя (если доступно хранилище)
+        if USER_QUERIES_STORAGE is not None and user_id is not None:
+            try:
+                USER_QUERIES_STORAGE.save_query(
+                    user_id=user_id,
+                    query=user_text,
+                    response=fallback_answer,
+                    metadata={"has_rag_context": bool(rag_context_lines), "fallback": True},
+                )
+                logger.info(f"Запрос пользователя {user_id} сохранен (fallback)")
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить запрос пользователя: {e}")
+        
+        return fallback_answer
     
     # Этап 3: Генерация ответа через GigaChat
     format_json = "format=json" in user_text.lower()
@@ -201,6 +279,19 @@ def ask_gigachat(user_text: str) -> str:
         # Добавляем RAG_CONFIDENCE если его нет
         if "RAG_CONFIDENCE:" not in answer:
             answer += "\n\nRAG_CONFIDENCE: high"
+        
+        # Сохраняем запрос и ответ пользователя (если доступно хранилище)
+        if USER_QUERIES_STORAGE is not None and user_id is not None:
+            try:
+                USER_QUERIES_STORAGE.save_query(
+                    user_id=user_id,
+                    query=user_text,
+                    response=answer,
+                    metadata={"has_rag_context": bool(rag_context_lines)},
+                )
+                logger.info(f"Запрос пользователя {user_id} сохранен")
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить запрос пользователя: {e}")
         
         return answer
         
@@ -920,14 +1011,15 @@ def handle_message(message):
         else:
             # Передаём свободную формулировку в RAG-поиск
             logger.info(f"Обработка релевантного вопроса от пользователя {user_id}")
-            reply = ask_gigachat(text)
+            reply = ask_gigachat(text, user_id=user_id)
         
         keyboard = get_question_keyboard()
         bot.send_message(user_id, reply, parse_mode='HTML', reply_markup=keyboard, disable_web_page_preview=True)
     
     else:
-        # Если пользователь не в режиме вопросов, проверяем на вопросы о ГУУ
-        # Проверяем, является ли сообщение вопросом о ГУУ
+        # Если пользователь не в режиме вопросов, проверяем на вопросы
+        # Проверяем, является ли сообщение вопросом (содержит "?" или ключевые слова)
+        is_question = "?" in text or any(word in text.lower() for word in ["что", "как", "где", "когда", "кто", "почему", "зачем", "сколько"])
         keywords = [
             "гуу", "университет управления", "прием", "поступление", "правила приема",
             "факультет", "направление", "кафедра", "общежит", "расписание", "стипенд", "перевод",
@@ -936,11 +1028,12 @@ def handle_message(message):
         ]
         is_guu_question = any(k in text.lower() for k in keywords)
         
-        if is_guu_question and len(text) > 10:
+        # Если это вопрос (с "?" или вопросное слово) или содержит ключевые слова о ГУУ
+        if (is_question or is_guu_question) and len(text) > 5:
             # Автоматически переключаемся в режим вопросов
             logger.info(f"Автоматическое переключение в режим вопросов для пользователя {user_id}")
             user_data[user_id]['state'] = 'ask_question'
-            reply = ask_gigachat(text)
+            reply = ask_gigachat(text, user_id=user_id)
             keyboard = get_question_keyboard()
             bot.send_message(user_id, reply, parse_mode='HTML', reply_markup=keyboard, disable_web_page_preview=True)
         else:
@@ -948,7 +1041,8 @@ def handle_message(message):
             bot.send_message(
                 user_id,
                 "🏠 <b>Главное меню</b>\n\n"
-                "Используйте кнопки меню ниже для навигации ⬇️",
+                "Используйте кнопки меню ниже для навигации ⬇️\n\n"
+                "💡 <i>Для задавания вопросов используйте кнопку '❓ Задать вопрос'</i>",
                 reply_markup=reply_keyboard,
                 parse_mode='HTML'
             )

@@ -18,6 +18,7 @@ class GigaChatClient:
 
     OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     CHAT_URL = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+    EMBEDDINGS_URL = "https://gigachat.devices.sberbank.ru/api/v1/embeddings"
 
     def __init__(
         self,
@@ -208,5 +209,104 @@ class GigaChatClient:
             return payload["choices"][0]["message"]["content"]
         except Exception:
             return str(payload)
+
+    def get_embeddings(
+        self,
+        texts: List[str],
+        model: str = "Embeddings",
+    ) -> List[List[float]]:
+        """
+        Получает векторные представления текстов через GigaChat Embeddings API.
+        
+        Args:
+            texts: Список текстов для векторизации
+            model: Модель для embeddings (по умолчанию "Embeddings")
+        
+        Returns:
+            Список векторов (каждый вектор - список из 1024 float)
+        """
+        token = self._get_token()
+        body: Dict[str, Any] = {
+            "model": model,
+            "input": texts,
+        }
+        
+        last_error = None
+        for attempt in range(self._max_retries):
+            try:
+                logger.info(f"GigaChat embeddings attempt {attempt + 1}/{self._max_retries} (texts: {len(texts)})")
+                response = requests.post(
+                    self.EMBEDDINGS_URL,
+                    headers=self._headers_api(token),
+                    json=body,
+                    timeout=self._request_timeout_sec,
+                    verify=self._verify_tls,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                
+                # Извлекаем векторы из ответа
+                # Формат ответа: {"data": [{"embedding": [0.1, 0.2, ...]}, ...]}
+                if "data" in payload:
+                    embeddings = [item["embedding"] for item in payload["data"]]
+                else:
+                    # Альтернативный формат ответа
+                    embeddings = payload.get("embeddings", [])
+                
+                if not embeddings:
+                    raise RuntimeError("GigaChat embeddings: no embeddings in response")
+                
+                logger.info(f"GigaChat embeddings successful: {len(embeddings)} vectors")
+                return embeddings
+                
+            except requests.exceptions.SSLError as e:
+                last_error = e
+                logger.warning(f"GigaChat embeddings SSL error: {e}")
+                if self._verify_tls:
+                    try:
+                        logger.warning("Retrying embeddings without TLS verification due to SSL error")
+                        response = requests.post(
+                            self.EMBEDDINGS_URL,
+                            headers=self._headers_api(token),
+                            json=body,
+                            timeout=self._request_timeout_sec,
+                            verify=False,
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        
+                        if "data" in payload:
+                            embeddings = [item["embedding"] for item in payload["data"]]
+                        else:
+                            embeddings = payload.get("embeddings", [])
+                        
+                        if not embeddings:
+                            raise RuntimeError("GigaChat embeddings: no embeddings in response")
+                        
+                        self._verify_tls = False
+                        logger.info("GigaChat embeddings successful without TLS verification")
+                        return embeddings
+                    except Exception as inner_e:
+                        last_error = inner_e
+                        logger.warning(f"Fallback embeddings without TLS verification failed: {inner_e}")
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_error = e
+                logger.warning(f"GigaChat embeddings attempt {attempt + 1} failed: {e}")
+                if attempt < self._max_retries - 1:
+                    time.sleep(self._retry_delay_sec * (attempt + 1))  # Exponential backoff
+                    # Refresh token on next attempt
+                    if attempt > 0:
+                        self._access_token = None
+                        token = self._get_token()
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code if hasattr(e, 'response') else 'unknown'
+                logger.error(f"GigaChat embeddings HTTP error {status_code}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"GigaChat embeddings unexpected error: {e}")
+                raise
+        
+        if last_error:
+            raise RuntimeError(f"GigaChat embeddings failed after {self._max_retries} attempts") from last_error
 
 
